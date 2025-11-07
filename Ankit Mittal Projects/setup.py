@@ -1,0 +1,30 @@
+from setuptools import setup, find_packages
+
+setup(
+    name="your-agent",
+    version="0.1.0",
+    packages=find_packages(),
+    install_requires=[
+        "fastapi",
+        "uvicorn",
+        "pydantic",
+        "pydantic-core",
+        "chromadb",
+        "pypdf",
+        "python-multipart",
+        "readability-lxml",
+        "requests",
+        "beautifulsoup4",
+        "langchain",
+        "langchain-community",
+        "langchain-openai",
+        "openai",
+        "google-generativeai",
+        "google-auth",
+        "tiktoken",
+        "python-dotenv",
+        "streamlit",
+        "numpy"
+    ],
+    python_requires=">=3.8",
+)
