@@ -28,10 +28,23 @@ RETRIEVER_K      -> default "4"
 
 You already used HuggingFace embeddings in ingest.py; we reuse the same for retrieval.
 """
+# Annotations for better type hints (Python 3.7+). Notes for humans and tools that explain what kind of data is expected, making code easier to read, debug, and maintain.
+from __future__ import annotations
+
+# ---- logging bootstrap (FIRST lines in file) ----
+from project_logger import init_logging, set_context, enable_global_tracing
+init_logging(project_name="Test_Ankit_Project", log_dir="logs", level="DEBUG")
+set_context(app_file=__file__)
+# Trace your whole repo; add key libs too (see step 3)
+enable_global_tracing(project_root=".")
+# -----------------------------------------------
+
 
 import os
 from typing import List, Tuple, Dict, Any, Iterable
 from operator import itemgetter
+from project_logger import get_logger, log_execution
+logger = get_logger("chat_core")
 
 # --- Vector store + embeddings ---------------------------------------------
 
@@ -54,6 +67,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.prompts.chat import MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda, RunnableParallel 
+from callbacks_logging import LoggerCallback
 
 # -------------------------
 # 1) Configuration helpers
@@ -147,7 +161,27 @@ def build_chain(retriever, llm):
         q = inputs["question"]                          # the user question that has been entered currently
         history = inputs.get("chat_history", [])        # gets the chat history if any (optional). Context won't be drawn on previous history
         # docs = retriever.get_relevant_documents(q)    # Does 2 things. 1. - Embed the query automatically and 2. Calls the retriever to run vector similarity search, returning top-k docs.
-        docs = retriever.invoke(q)                      # Newer method name as per latest Langchain versions.
+        # Get the underlying vectorstore from retriever if present
+        vs = getattr(retriever, "vectorstore", None)
+        docs = []
+        if vs is not None and hasattr(vs, "similarity_search_with_relevance_scores"):
+            # scores in [0..1] (higher = more similar)
+            scored = vs.similarity_search_with_relevance_scores(q, k=getattr(retriever, "search_kwargs", {}).get("k", 4))
+            docs = []
+            for doc, score in scored:
+                try:
+                    doc.metadata = dict(doc.metadata or {})
+                    doc.metadata["relevance_score"] = float(score)
+                except Exception:
+                    pass
+                docs.append(doc)
+            logger.info("retrieval-scored", extra={"extra_data": {"query": q, "hits": len(docs),
+                                                             "scores": [d.metadata.get("relevance_score") for d in docs]}})
+        else:
+                # LCEL retriever path
+            docs = retriever.invoke(q)
+            logger.info("retrieval-basic", extra={"extra_data": {"query": q, "hits": len(docs)}})
+            # docs = retriever.invoke(q)                      # Newer method name as per latest Langchain versions.
         return {
                 "question": q,
                 "chat_history": history,
@@ -158,6 +192,8 @@ def build_chain(retriever, llm):
     # Wraps the _retrieve function as a Runnable
     retrieval = RunnableLambda(_retrieve)
 
+    # Wiring the callback for logging
+    #from callbacks_logging import LoggerCallback
     # Step 2: LLM generation 
     # Generate answer from prompt + LLM, and pass sources through
     generate = prompt | llm | StrOutputParser()
@@ -168,8 +204,10 @@ def build_chain(retriever, llm):
     # RunnableParallel runs two branches in parallel on that dict:
     # answer=generate: produces the final answer string
     # sources=itemgetter("sources"): just pulls through the original docs
-    chain = retrieval | RunnableParallel(answer=generate, sources=itemgetter("sources"))
-    
+    # chain = retrieval | RunnableParallel(answer=generate, sources=itemgetter("sources")) -- Old line before adding logging callback
+    chain = (retrieval | RunnableParallel(answer=generate, sources=itemgetter("sources"))).with_config(
+        callbacks=[LoggerCallback("lc-callback")] ) # Attach logging callback to the chain
+
     return chain
 
 # -------------------------------------------------
@@ -186,7 +224,9 @@ def answer_question(chain, question: str, history: List[Tuple[str, str]]):
     Returns: dict with keys "answer" and "sources"
     """
     coerced = _coerce_history(history)
-    result = chain.invoke({"question": question, "chat_history": coerced})
+    # Wiring the callback for logging
+    # from callbacks_logging import LoggerCallback
+    result = chain.invoke({"question": question, "chat_history": coerced}, config={"callbacks": [LoggerCallback("invoke")]})
     return {"answer": result["answer"], "sources": result["sources"]}
 
 # Helper to coerce chat history into required format that MessagesPlaceholder("chat_history") expects such as [("human", u1), ("ai", a1), ("human", u2), ("ai", a2), ...    ]

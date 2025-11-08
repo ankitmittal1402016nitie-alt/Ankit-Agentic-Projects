@@ -34,9 +34,12 @@ REQUIRED_PACKAGES = [
     "langchain_community",
     "langchain_openai",
     "langchain_huggingface",
+    "sentence_transformers",
+    "langchain_text_splitters",
     "langchain_chroma",
     "langchain_core",
-    "chromadb", 
+    "dotenv",
+    "chromadb",
     "pypdf",
     "tiktoken",
 ]

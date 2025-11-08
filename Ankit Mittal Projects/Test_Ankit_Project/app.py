@@ -21,6 +21,25 @@ C. Run
 ---
 streamlit run app.py
 """
+# Annotations for better type hints (Python 3.7+). Notes for humans and tools that explain what kind of data is expected, making code easier to read, debug, and maintain.
+from __future__ import annotations
+
+# Enable Logs using Project Logger
+from project_logger import init_logging, set_context, enable_global_tracing
+init_logging(project_name="Test_Ankit_Project", log_dir="logs", level="INFO")
+set_context(component="app", ui="streamlit")
+enable_global_tracing(project_root=".")
+
+import logging
+logging.getLogger("langchain").setLevel(logging.DEBUG)
+logging.getLogger("langchain_core").setLevel(logging.DEBUG)
+logging.getLogger("langchain_chroma").setLevel(logging.DEBUG)
+logging.getLogger("chromadb").setLevel(logging.DEBUG)
+logging.getLogger("sentence_transformers").setLevel(logging.INFO)
+logging.getLogger("httpx").setLevel(logging.DEBUG)  # shows request lines
+
+import importlib, os
+from project_logger import enable_global_tracing
 
 import streamlit as st
 from typing import List, Tuple
@@ -33,6 +52,22 @@ from chat_core import (
     build_chain,
     answer_question,
 )
+print("ankit1")
+def _pkg_dir(name: str) -> str:
+    m = importlib.import_module(name)
+    return os.path.dirname(m.__file__)
+print("ankit2")
+project_root = os.path.abspath(".")
+paths = [
+    # project_root,
+    # _pkg_dir("langchain"),                 # core
+    # _pkg_dir("langchain_chroma"),          # chroma integration
+    # _pkg_dir("chromadb"),                  # chroma engine
+    # _pkg_dir("langchain_huggingface"),     # HF embeddings wrapper
+    # _pkg_dir("sentence_transformers"),     # actual embedding model code
+]
+print("ankit3")
+# enable_global_tracing(include_paths=paths)
 
 # -----------------
 # 0) Page settings
@@ -54,7 +89,8 @@ def bootstrap():
     - LLM and chain
     """
     # Here cfg and chain are local variables, but we return them to be stored as cached resources
-    cfg = get_settings()
+    cfg = get_settings()  
+    # Loads the vector store from disk
     vs = load_vectorstore(cfg["db_dir"], cfg["embed_model"])
     # Builds the retriever object from the vector store with top-k setting
     retriever = build_retriever(vs, cfg["top_k"])
@@ -95,6 +131,7 @@ question = st.text_input("Ask a question about your documents:")
 # 4) Ask + render
 # ---------------
 if st.button("Ask") and question.strip():
+  
     # Build a light style hint to bias the LLM without over-engineering prompts.
     style_hint = (
         "Give a brief, 3–5 sentence summary."

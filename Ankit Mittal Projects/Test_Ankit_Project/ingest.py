@@ -33,8 +33,22 @@ python ingest.py --urls https://example.com/a https://example.com/b
 # See all options:
 python ingest.py --help
 """
+
 # Annotations for better type hints (Python 3.7+). Notes for humans and tools that explain what kind of data is expected, making code easier to read, debug, and maintain.
 from __future__ import annotations
+
+# ---- logging bootstrap (FIRST lines in file) ----
+from project_logger import init_logging, set_context, enable_global_tracing
+init_logging(project_name="Test_Ankit_Project", log_dir="logs", level="DEBUG")
+set_context(app_file=__file__)
+# Trace your whole repo; add key libs too (see step 3)
+enable_global_tracing(project_root=".")
+# -----------------------------------------------  # or absolute path to your repo root
+
+# place near the top of app.py (after init_logging)
+import importlib, os, time
+from project_logger import enable_global_tracing, get_logger, log_execution, log_block
+logger = get_logger("ingest")
 
 # argparse for CLI argument parsing. Takes human-friendly input and turns it into structured data your code can act on so that script reads and understands those arguments
 import argparse
@@ -42,7 +56,7 @@ import glob
 
 # Hashlib for stable chunk IDs. Takes any data (like a password, file, or text) and converts it into a unique fixed-length code (called a hash).
 import hashlib
-import os
+#import os
 from typing import Iterable, List, Sequence
 
 # --- LangChain loaders & utils (DOCUMENTS IN) -------------------------------
@@ -148,7 +162,7 @@ def load_webpages(urls: Sequence[str]) -> List[Document]:
 # =================================
 # 3) SPLITTING INTO RAG i.e. CHUNKS
 # =================================
-
+@log_execution(purpose="split_documents")
 def split_documents(
     docs: Sequence[Document], chunk_size: int, chunk_overlap: int
 ) -> List[Document]:
@@ -170,6 +184,7 @@ def split_documents(
 # ==================================
 
 # Creates embeddings for documents
+@log_execution(purpose="build-vectorstore")
 def make_embeddings(model_name: str) -> HuggingFaceEmbeddings:
     """
     Create a HuggingFace embeddings object.
@@ -256,11 +271,32 @@ def main() -> None:
     # 2) Split to chunks
     all_docs = pdf_docs + web_docs
     chunks = split_documents(all_docs, args.chunk_size, args.chunk_overlap)
+    total_chars = sum(len(d.page_content or "") for d in chunks)
+    avg = int(total_chars / max(1, len(chunks)))
+    logger.info("chunk-stats", extra={"extra_data": {"chunks": len(chunks), "total_chars": total_chars, "avg_chars": avg}})
     print(f"✂️  Split into {len(chunks)} chunks")
 
     # 3) Prepare embeddings + vector store
+    t0 = time.time()
     embeddings = make_embeddings(args.model)
-    vectordb = create_or_load_chroma(args.db_folder, embeddings)
+     # probe dim - This is to record time taken to embed the docs
+    dim = len(embeddings.embed_query("dimension probe"))
+    with log_block("chroma-create"):
+         vectordb = create_or_load_chroma(args.db_folder, embeddings)
+    elapsed = int((time.time() - t0)*1000)
+    logger.info("embeddings-stats", extra={"extra_data": {"embedding_dim": dim, "docs": len(all_docs), "elapsed_ms": elapsed}})
+
+    # Assess the side of the vector DB before upsert
+    try: 
+        size_bytes = 0
+        for root, _, files in os.walk(args.db_folder):
+            for f in files:
+                size_bytes += os.path.getsize(os.path.join(root, f))
+        logger.info("chroma-disk", extra={"extra_data": {"persist_dir": args.db_folder, "bytes": size_bytes}})
+    except Exception as e:
+        logger.warning("chroma-disk-error", extra={"extra_data": {"error": str(e)}})
+        pass
+    logger.info(f"🗄️  Chroma vector DB ready at '{args.db_folder}'")
 
     # 4) Upsert chunks (idempotent)
     added = upsert_chunks(vectordb, chunks)
