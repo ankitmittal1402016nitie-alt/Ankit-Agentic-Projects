@@ -36,28 +36,11 @@ python ingest.py --help
 
 # Annotations for better type hints (Python 3.7+). Notes for humans and tools that explain what kind of data is expected, making code easier to read, debug, and maintain.
 from __future__ import annotations
-
-# ---- logging bootstrap (FIRST lines in file) ----
-from project_logger import init_logging, set_context, enable_global_tracing
-init_logging(project_name="Test_Ankit_Project", log_dir="logs", level="DEBUG")
-set_context(app_file=__file__)
-# Trace your whole repo; add key libs too (see step 3)
-enable_global_tracing(project_root=".")
-# -----------------------------------------------  # or absolute path to your repo root
-
-# place near the top of app.py (after init_logging)
-import importlib, os, time
-from project_logger import enable_global_tracing, get_logger, log_execution, log_block
-logger = get_logger("ingest")
-
-# argparse for CLI argument parsing. Takes human-friendly input and turns it into structured data your code can act on so that script reads and understands those arguments
-import argparse
-import glob
+import importlib, os, time, glob, argparse
+from typing import Iterable, List, Sequence
 
 # Hashlib for stable chunk IDs. Takes any data (like a password, file, or text) and converts it into a unique fixed-length code (called a hash).
 import hashlib
-#import os
-from typing import Iterable, List, Sequence
 
 # --- LangChain loaders & utils (DOCUMENTS IN) -------------------------------
 from langchain_community.document_loaders import PyPDFLoader, WebBaseLoader
@@ -77,11 +60,17 @@ from langchain_huggingface import HuggingFaceEmbeddings
 # from langchain_community.vectorstores import Chroma -- Old import path that has been deprecated now. 
 from langchain_chroma import Chroma    # pip install -U langchain-chroma
 
+# >>> LOGGING ADDED
+from project_logger import get_logger, log_execution, log_block
+logger = get_logger("ingest")
+# <<< LOGGING ADDED
+
+
+#>>>>------------------------------ Code Starts -------------------------->>>
 
 # =========================
 # 1) CONFIG & CLI ARGUMENTS
 # =========================
-
 # Parse command-line arguments, takes input from user when they run the script to customize behavior and also adds default value when not provided by user
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for flexible ingestion."""
@@ -131,7 +120,6 @@ def parse_args() -> argparse.Namespace:
 # =========================
 # 2) LOADING SOURCE CONTENT
 # =========================
-
 # Load PDFs from a folder into Document objects
 def load_pdfs(pdf_folder: str, pattern: str = "*.pdf") -> List[Document]:
     """
@@ -162,7 +150,7 @@ def load_webpages(urls: Sequence[str]) -> List[Document]:
 # =================================
 # 3) SPLITTING INTO RAG i.e. CHUNKS
 # =================================
-@log_execution(purpose="split_documents")
+@log_execution(purpose="split-docs")
 def split_documents(
     docs: Sequence[Document], chunk_size: int, chunk_overlap: int
 ) -> List[Document]:
@@ -182,9 +170,8 @@ def split_documents(
 # ==================================
 # 4) EMBEDDINGS & VECTORSTORE HELPERS
 # ==================================
-
-# Creates embeddings for documents
 @log_execution(purpose="build-vectorstore")
+# Creates embeddings for documents
 def make_embeddings(model_name: str) -> HuggingFaceEmbeddings:
     """
     Create a HuggingFace embeddings object.
@@ -251,7 +238,6 @@ def upsert_chunks(vs: Chroma, chunks: Sequence[Document]) -> int:
 # ===========================
 # 5) ORCHESTRATION (MAIN FLOW)
 # ===========================
-
 def main() -> None:
     args = parse_args()
 
@@ -273,7 +259,10 @@ def main() -> None:
     chunks = split_documents(all_docs, args.chunk_size, args.chunk_overlap)
     total_chars = sum(len(d.page_content or "") for d in chunks)
     avg = int(total_chars / max(1, len(chunks)))
-    logger.info("chunk-stats", extra={"extra_data": {"chunks": len(chunks), "total_chars": total_chars, "avg_chars": avg}})
+    logger.info("chunk-stats", extra={"extra_data": {
+        "chunks": len(chunks), "total_chars": total_chars,
+        "avg_chars": avg, "chunk_size": args.chunk_size, "overlap": args.chunk_overlap
+    }})
     print(f"✂️  Split into {len(chunks)} chunks")
 
     # 3) Prepare embeddings + vector store
@@ -282,21 +271,19 @@ def main() -> None:
      # probe dim - This is to record time taken to embed the docs
     dim = len(embeddings.embed_query("dimension probe"))
     with log_block("chroma-create"):
-         vectordb = create_or_load_chroma(args.db_folder, embeddings)
+        vectordb = create_or_load_chroma(args.db_folder, embeddings)
     elapsed = int((time.time() - t0)*1000)
-    logger.info("embeddings-stats", extra={"extra_data": {"embedding_dim": dim, "docs": len(all_docs), "elapsed_ms": elapsed}})
 
-    # Assess the side of the vector DB before upsert
+    # Assess the size of the vector DB before upsert
     try: 
         size_bytes = 0
         for root, _, files in os.walk(args.db_folder):
             for f in files:
                 size_bytes += os.path.getsize(os.path.join(root, f))
-        logger.info("chroma-disk", extra={"extra_data": {"persist_dir": args.db_folder, "bytes": size_bytes}})
     except Exception as e:
-        logger.warning("chroma-disk-error", extra={"extra_data": {"error": str(e)}})
+        print("chroma-disk-error", extra={"extra_data": {"error": str(e)}})
         pass
-    logger.info(f"🗄️  Chroma vector DB ready at '{args.db_folder}'")
+    print(f"🗄️  Chroma vector DB ready at '{args.db_folder}'")
 
     # 4) Upsert chunks (idempotent)
     added = upsert_chunks(vectordb, chunks)

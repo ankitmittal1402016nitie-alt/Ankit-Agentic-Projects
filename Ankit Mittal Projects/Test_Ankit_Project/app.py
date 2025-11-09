@@ -24,23 +24,6 @@ streamlit run app.py
 # Annotations for better type hints (Python 3.7+). Notes for humans and tools that explain what kind of data is expected, making code easier to read, debug, and maintain.
 from __future__ import annotations
 
-# Enable Logs using Project Logger
-from project_logger import init_logging, set_context, enable_global_tracing
-init_logging(project_name="Test_Ankit_Project", log_dir="logs", level="INFO")
-set_context(component="app", ui="streamlit")
-enable_global_tracing(project_root=".")
-
-import logging
-logging.getLogger("langchain").setLevel(logging.DEBUG)
-logging.getLogger("langchain_core").setLevel(logging.DEBUG)
-logging.getLogger("langchain_chroma").setLevel(logging.DEBUG)
-logging.getLogger("chromadb").setLevel(logging.DEBUG)
-logging.getLogger("sentence_transformers").setLevel(logging.INFO)
-logging.getLogger("httpx").setLevel(logging.DEBUG)  # shows request lines
-
-import importlib, os
-from project_logger import enable_global_tracing
-
 import streamlit as st
 from typing import List, Tuple
 
@@ -52,33 +35,35 @@ from chat_core import (
     build_chain,
     answer_question,
 )
-print("ankit1")
-def _pkg_dir(name: str) -> str:
-    m = importlib.import_module(name)
-    return os.path.dirname(m.__file__)
-print("ankit2")
-project_root = os.path.abspath(".")
-paths = [
-    # project_root,
-    # _pkg_dir("langchain"),                 # core
-    # _pkg_dir("langchain_chroma"),          # chroma integration
-    # _pkg_dir("chromadb"),                  # chroma engine
-    # _pkg_dir("langchain_huggingface"),     # HF embeddings wrapper
-    # _pkg_dir("sentence_transformers"),     # actual embedding model code
-]
-print("ankit3")
-# enable_global_tracing(include_paths=paths)
 
+# silence unnecessary logs globally 
+import logging
+for name in [
+    "httpx", "urllib3", "chromadb.telemetry", "posthog",
+    "sentence_transformers", "torch", "PIL", "numexpr", "duckdb"
+]:
+    logging.getLogger(name).setLevel(logging.WARNING)
+
+# >>> LOGGING ADDED
+from project_logger import init_logging, set_context, get_logger, log_block
+init_logging(project_name="Test_Ankit_Project", log_dir="logs", level="INFO")
+set_context(component="app", ui="streamlit")
+logger = get_logger("app")
+# <<< LOGGING ADDED
+
+# >>>------------------------- Code Starts ------------------------------>>>
 # -----------------
 # 0) Page settings
 # -----------------
-st.set_page_config(page_title="Ask Your PDFs", page_icon="📚", layout="wide")
-st.title("📚 Ask Your PDFs & Web Pages")
+# >>> LOGGING ADDED
+with log_block("page-render"):
+    st.set_page_config(page_title="Ask Your PDFs", page_icon="📚", layout="wide")
+    st.title("📚 Ask Your PDFs & Web Pages")
+# <<< LOGGING ADDED
 
 # -----------------------
 # 1) Initialize everything
 # -----------------------
-
 # Saves heavy resources across reruns for streamlit apps
 @st.cache_resource(show_spinner=False)
 # It stores heavy resources to speed up reruns. On rerun, the cached objects are returned instantly if the inputs/config didn’t change
@@ -109,7 +94,6 @@ cfg, chain = bootstrap()
 # ---------------------------------
 # 2) Session-scoped chat transcript
 # ---------------------------------
-
 # Checks if history exists in session state, else initializes it to retain the user's context across interactions
 if "history" not in st.session_state:
     # store as list of (user_text, ai_text)
@@ -119,10 +103,22 @@ if "history" not in st.session_state:
 # 3) Controls + inputs
 # ---------------------
 with st.sidebar:
+    import os
+    from datetime import datetime
     st.header("Settings")
     st.write(f"LLM provider: **{cfg['llm_provider']}**")
     st.write(f"Retriever k: **{cfg['top_k']}**")
     st.caption(f"DB: `{cfg['db_dir']}` · Embeddings: `{cfg['embed_model']}`")
+
+    # >>> LOGGING ADDED. Shows imp. logs on the sidebar for quick debugging
+    st.markdown("---")
+    st.subheader("Recent logs")
+    _today = datetime.now().strftime("%Y-%m-%d")
+    _path = os.path.join("logs", f"project_log_{_today}.log")
+    if os.path.exists(_path):
+        with open(_path, "r", encoding="utf-8") as f:
+            st.code("".join(f.readlines()[-40:]), language="text")
+    # <<< LOGGING ADDED
 
 style = st.radio("Response style", ["Summary", "Detailed"], horizontal=True)
 question = st.text_input("Ask a question about your documents:")
@@ -131,7 +127,11 @@ question = st.text_input("Ask a question about your documents:")
 # 4) Ask + render
 # ---------------
 if st.button("Ask") and question.strip():
-  
+
+    # >>> LOGGING ADDED
+    logger.info("user-question", extra={"extra_data": {"question": question, "style": style, "len": len(question.strip())}})
+    # <<< LOGGING ADDED
+
     # Build a light style hint to bias the LLM without over-engineering prompts.
     style_hint = (
         "Give a brief, 3–5 sentence summary."
@@ -146,6 +146,12 @@ if st.button("Ask") and question.strip():
     with st.spinner("Thinking..."):
         # LCEL chain in chat_core returns {"answer": str, "sources": list[Document]}
         result = answer_question(chain, styled_question, st.session_state.history)  # -- no need to convert history here again to lc_history
+
+    # >>> LOGGING ADDED
+        logger.info("answer-ready", extra={"extra_data": {
+        "answer_len": len(result["answer"]), "sources": len(result.get("sources", []))
+    }})
+    # <<< LOGGING ADDED
 
     # Append to session history
     st.session_state.history.append((question.strip(), result["answer"]))
